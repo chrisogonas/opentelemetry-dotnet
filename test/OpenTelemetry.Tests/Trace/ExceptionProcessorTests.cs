@@ -121,6 +121,50 @@ public class ExceptionProcessorTests
         Assert.Equal(StatusCode.Unset, activity.GetStatus().StatusCode);
     }
 
+    [Fact]
+    public async Task ActivityStatusNotSetOnOuterActivityWhenAsyncExceptionIsCaught()
+    {
+        // Regression test for https://github.com/open-telemetry/opentelemetry-dotnet/issues/2753
+        var activitySourceName = Utils.GetCurrentMethodName();
+        using var activitySource = new ActivitySource(activitySourceName);
+        using var tracerProvider = Sdk.CreateTracerProviderBuilder()
+            .AddSource(activitySourceName)
+            .SetSampler(new AlwaysOnSampler())
+            .SetErrorStatusOnException()
+            .Build();
+
+        Activity? outer = null;
+        Activity? inner = null;
+
+        using (outer = activitySource.StartActivity("Outer"))
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+            try
+            {
+                using (inner = activitySource.StartActivity("Inner"))
+                {
+                    await ThrowAfterDelayAsync();
+                }
+            }
+            catch (InvalidOperationException)
+            {
+                // Caught: the outer activity should not be marked as an error.
+            }
+        }
+
+        Assert.NotNull(inner);
+        Assert.Equal(StatusCode.Error, inner.GetStatus().StatusCode);
+
+        Assert.NotNull(outer);
+        Assert.Equal(StatusCode.Unset, outer.GetStatus().StatusCode);
+    }
+
+    private static async Task ThrowAfterDelayAsync()
+    {
+        await Task.Delay(10, TestContext.Current.CancellationToken);
+        throw new InvalidOperationException("Oops!");
+    }
+
     private static object? GetTagValue(Activity activity, string tagName)
     {
         foreach (ref readonly var tag in activity.EnumerateTagObjects())
